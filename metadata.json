@@ -1,0 +1,6 @@
+{
+  "name": "AURA Habitats",
+  "description": "Estudio de diseño de vanguardia, arquitectura sustentable y desarrollo de proyectos inmobiliarios premium y residencias de lujo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
