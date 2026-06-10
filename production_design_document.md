@@ -6,28 +6,26 @@ This document outlines the system architecture, database schema, security polici
 
 ## 1. Architectural Overview
 
-The application will be built using a modern full-stack architecture leveraging **Next.js (App Router)**, **Supabase** (as the relational database), **Cloudflare R2** (for cost-effective, high-performance object storage), and a unified **AI Orchestrator** for intelligent client insights.
+The application will be built using a modern full-stack architecture leveraging **Next.js (App Router)**, **Supabase** (as the relational database and object storage provider), and a unified **AI Orchestrator** for intelligent client insights.
 
 ```mermaid
 graph TD
     Client[Next.js Client Components] <-->|Fetch / Session Auth| NextServer[Next.js Server / API Routes]
     ExternalApp[External Partner Apps] <-->|API Request + X-API-Key| NextServer
     
-    NextServer <-->|SQL Queries| Postgres[(Supabase PostgreSQL)]
-    NextServer <-->|AWS S3 SDK| R2[Cloudflare R2 Storage]
+    NextServer <-->|SQL Queries & Storage SDK| Supabase[(Supabase DB & Storage)]
     
     subgraph AI Orchestrator
         NextServer -->|Primary API| Gemini[Google Gemini API]
-        NextServer -.->|Fallback API| OpenAI[OpenAI API]
+        NextServer -.->|Fallback API (Opcional)| OpenAI[OpenAI API]
     end
 ```
 
 ### Core Technologies
 *   **Frontend & Server Environment:** Next.js (App Router) with TypeScript and Tailwind CSS.
-*   **Database:** PostgreSQL (hosted on Supabase) for relational integrity.
-*   **Object Storage:** Cloudflare R2 (S3-compatible API) accessed via the AWS S3 SDK.
+*   **Database & Object Storage:** PostgreSQL and Storage Buckets hosted on Supabase, accessed via the `@supabase/supabase-js` and `@supabase/ssr` SDKs.
 *   **Authentication:** Combined Middleware supporting session cookie authentication (via Supabase Auth) and Custom Header `x-api-key` validation.
-*   **AI Services:** Google Gemini (Primary) and OpenAI (Fallback) for generating custom budget suggestions and design recommendations.
+*   **AI Services:** Google Gemini (Primary) and OpenAI (Optional Fallback) for generating custom budget suggestions and design recommendations.
 
 ---
 
@@ -146,7 +144,7 @@ Stores luxury architectural projects.
 | `name` | `text` | NOT NULL | Project name. |
 | `category` | `text` | NOT NULL, CHECK (`category` IN ('Residencial', 'Corporativo', 'Sostenible')) | Category filter. |
 | `location` | `text` | NOT NULL | Geographic location. |
-| `image_url` | `text` | NOT NULL | Public Cloudflare R2 URL to the header image. |
+| `image_url` | `text` | NOT NULL | Public Supabase Storage URL to the header image. |
 | `area` | `text` | NOT NULL | Built area (e.g., "520 m²"). |
 | `year` | `text` | NOT NULL | Year of completion or launch. |
 | `description` | `text` | NOT NULL | Short card description. |
@@ -226,29 +224,41 @@ sequenceDiagram
 
 ---
 
-## 4. Object Storage Configuration (Cloudflare R2)
+## 4. Object Storage Configuration (Supabase Storage)
 
-All static asset uploads are routed to a **Cloudflare R2** bucket using the AWS S3 SDK Client (`@aws-sdk/client-s3`).
+All static asset uploads are routed to a **Supabase Storage** public bucket named `aura-assets`.
 
-### 4.1 Folder Organization & Lifecycles
+### 4.1 Folder Organization
 *   `/temp/*`: Temporary uploads (e.g. images uploaded during a draft project creation).
-    *   **R2 Lifecycle Rule:** Files in `/temp/` are configured to delete automatically after **24 hours**.
 *   `/projects/*`: Permanent high-resolution images for projects.
 *   `/materials/*`: Permanent material preview images.
 *   `/brochures/*`: Dossiers and digital catalogs (PDF format).
 
 ### 4.2 Code Integration Example
 ```typescript
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { createClient } from "@supabase/supabase-js";
 
-const s3 = new S3Client({
-  region: "auto",
-  endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-  },
-});
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY! // Used in server-side/API route for uploads
+);
+
+export async function uploadFile(file: Buffer, path: string, mimeType: string) {
+  const { data, error } = await supabase.storage
+    .from("aura-assets")
+    .upload(path, file, {
+      contentType: mimeType,
+      upsert: true,
+    });
+    
+  if (error) throw error;
+  
+  const { data: { publicUrl } } = supabase.storage
+    .from("aura-assets")
+    .getPublicUrl(path);
+    
+  return publicUrl;
+}
 ```
 
 ---
@@ -283,7 +293,8 @@ import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// OpenAI is optional and fallback is only executed if API key is provided
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 export async function generateDesignReview(prompt: string): Promise<string> {
   try {
@@ -294,19 +305,25 @@ export async function generateDesignReview(prompt: string): Promise<string> {
     });
     return response.text || "";
   } catch (error) {
-    console.error("Gemini failed. Switching to OpenAI fallback...", error);
+    console.error("Gemini failed. Checking fallback...", error);
     
-    try {
-      // Fallback Provider: OpenAI
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-      });
-      return completion.choices[0].message.content || "";
-    } catch (fallbackError) {
-      console.error("All AI providers failed.", fallbackError);
-      throw new Error("Unable to process request at this time.");
+    if (openai) {
+      try {
+        console.log("Switching to OpenAI fallback...");
+        // Fallback Provider: OpenAI
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+        });
+        return completion.choices[0].message.content || "";
+      } catch (fallbackError) {
+        console.error("OpenAI fallback failed.", fallbackError);
+      }
+    } else {
+      console.log("OpenAI API key not configured. No fallback available.");
     }
+    
+    throw new Error("Unable to process request at this time.");
   }
 }
 ```
@@ -325,7 +342,7 @@ export async function generateDesignReview(prompt: string): Promise<string> {
     ```json
     {
       "success": true,
-      "url": "https://pub-xxxxxx.r2.dev/projects/file-uuid.webp"
+      "url": "https://xxxx.supabase.co/storage/v1/object/public/aura-assets/projects/file-uuid.webp"
     }
     ```
 
@@ -369,9 +386,9 @@ export async function generateDesignReview(prompt: string): Promise<string> {
 │   └── api/
 │       ├── admin/
 │       │   ├── upload/
-│       │   │   └── route.ts   # S3/R2 File uploader handler
+│       │   │   └── route.ts   # Supabase Storage File uploader handler
 │       │   └── enquiries/
-				│   │   │   └── route.ts   # Lead queries endpoint (supports x-api-key)
+│       │       └── route.ts   # Lead queries endpoint (supports x-api-key)
 │       └── ai/
 │           └── review/
 │               └── route.ts   # Budget analysis endpoint (calls orchestrator)
@@ -387,5 +404,6 @@ export async function generateDesignReview(prompt: string): Promise<string> {
 │   │   ├── client.ts          # Client SDK instance
 │   │   ├── server.ts          # Server SDK instance
 │   │   └── middleware.ts      # Auth validation for /admin and API headers
+│   ├── storage.ts             # Supabase Storage helper
 │   └── utils.ts               # Shared helpers (formatting, class names)
 ```
