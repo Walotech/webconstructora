@@ -1,9 +1,12 @@
+'use client';
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { motion } from 'motion/react';
+
 import { ArrowDown, Flame, CornerRightDown, Plus } from 'lucide-react';
 
 interface HeroProps {

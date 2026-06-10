@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -21,6 +23,11 @@ export default function InvestmentPlanner({ onExportEstimate }: InvestmentPlanne
   const [estimatedBudget, setEstimatedBudget] = useState<{ min: number; max: number }>({ min: 0, max: 0 });
   const [timelineMonths, setTimelineMonths] = useState<number>(12);
   const [carbonOffset, setCarbonOffset] = useState<number>(0);
+
+  // AI Advice state
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResponse, setAiResponse] = useState<string | null>(null);
+  const [aiProvider, setAiProvider] = useState<'gemini' | 'openai' | null>(null);
 
   useEffect(() => {
     // Calcul de base m2 (módulos sutiles de lujo)
@@ -71,6 +78,39 @@ export default function InvestmentPlanner({ onExportEstimate }: InvestmentPlanne
     }, con Domótica ${automation === 'pasivo' ? 'Pasiva Ecológica' : 'Integral AURA Connect'}. Cotización Estimada: ${estimatedBudget.min.toLocaleString('es-ES')}€ - ${estimatedBudget.max.toLocaleString('es-ES')}€`;
     
     onExportEstimate(formattedBuilder);
+  };
+
+  const handleGetAiReview = async () => {
+    setAiLoading(true);
+    setAiResponse(null);
+    try {
+      const res = await fetch('/api/ai/review', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          propertyType,
+          area,
+          materialLevel,
+          automation,
+          estimatedMin: estimatedBudget.min,
+          estimatedMax: estimatedBudget.max,
+        }),
+      });
+      const data = await res.json();
+      if (data.recommendation) {
+        setAiResponse(data.recommendation);
+        setAiProvider(data.provider);
+      } else {
+        setAiResponse('No se pudo generar la recomendación de la IA. Por favor, inténtelo de nuevo.');
+      }
+    } catch (err) {
+      console.error('Error fetching AI advice:', err);
+      setAiResponse('Ocurrió un error al conectar con el servicio de IA.');
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   const getPropertyLabel = (type: string) => {
@@ -284,7 +324,23 @@ export default function InvestmentPlanner({ onExportEstimate }: InvestmentPlanne
               </div>
 
               {/* Action Button: Export to Contact Form */}
-              <div className="pt-6 border-t border-stone-850">
+              <div className="pt-6 border-t border-stone-850 space-y-3">
+                <button
+                  id="btn-ai-review"
+                  onClick={handleGetAiReview}
+                  disabled={aiLoading}
+                  className="w-full py-3.5 border border-emerald-450/45 hover:bg-emerald-400/5 text-emerald-300 font-mono text-xs uppercase tracking-widest font-semibold transition-all duration-350 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {aiLoading ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-emerald-350 border-t-transparent rounded-full animate-spin"></span>
+                      Analizando Proyecto...
+                    </>
+                  ) : (
+                    'Consultar Asesoría de IA'
+                  )}
+                </button>
+
                 <button
                   id="btn-export-planner-estimate"
                   onClick={handleExport}
@@ -296,6 +352,31 @@ export default function InvestmentPlanner({ onExportEstimate }: InvestmentPlanne
                   Rellena automáticamente los campos del formulario de abajo
                 </div>
               </div>
+
+              {/* AI Advice Output Display */}
+              { (aiLoading || aiResponse) && (
+                <div className="mt-4 p-4 border border-stone-800 bg-stone-950/80 rounded-none text-[11px] font-sans font-light text-stone-300 max-h-72 overflow-y-auto space-y-3 scrollbar-thin scrollbar-thumb-stone-800 leading-relaxed">
+                  <div className="flex items-center justify-between border-b border-stone-850 pb-2 mb-2">
+                    <span className="font-mono text-[9px] uppercase tracking-wider text-emerald-400 font-medium">
+                      Estudio de Viabilidad IA
+                    </span>
+                    {aiProvider && (
+                      <span className="font-mono text-[8px] text-stone-500 uppercase">
+                        Motor: {aiProvider}
+                      </span>
+                    )}
+                  </div>
+                  {aiLoading ? (
+                    <div className="py-8 text-center text-stone-500 font-mono text-[10px] animate-pulse">
+                      Calculando métricas estructurales e impacto ambiental...
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap select-text font-light text-stone-300 text-xs text-justify">
+                      {aiResponse}
+                    </div>
+                  )}
+                </div>
+              )}
 
             </div>
 
